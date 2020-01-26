@@ -58,7 +58,7 @@ class ConvertLasFile(luigi.Task):
             self.input_path,
             self.output_path,
         ]
-        subprocess.call(cmd)
+        subprocess.check_output(cmd)
 
 
 class CreateMeshFromLasData(luigi.Task):
@@ -97,7 +97,7 @@ class CreateMeshFromLasData(luigi.Task):
                 'tmp', 'converted-{}'.format(os.path.basename(original_path)))
             convert_tasks.append(
                 ConvertLasFile(
-                    input_path=original_path,
+                    input_path=download_task.output().path,
                     output_path=converted_path
                 ))
         yield convert_tasks
