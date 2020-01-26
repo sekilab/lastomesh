@@ -11,3 +11,4 @@ open3d
 requests
 transforms3d
 jupyter
+-e git+https://github.com/colspan/lasto3dtiles.git#egg=lasto3dtiles-0.9.0
