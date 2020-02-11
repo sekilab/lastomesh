@@ -64,15 +64,19 @@ class ConvertLasFile(luigi.Task):
 class CreateMeshFromLasData(luigi.Task):
     product_id = luigi.Parameter()
     base_url = 'https://raw.githubusercontent.com/colspan/pcd-open-datasets/master/shizuokapcd/product/{}.json'
+    output_dir = luigi.Parameter(default='tmp')
+    file_format = luigi.Parameter(default='ply')
+    mesh_type = luigi.Parameter(default='poisson')
+    simplify_type = luigi.Parameter(default='quadric_decimation')
 
     def requires(self):
         return TextDownloader(
             url=self.base_url.format(self.product_id),
-            filepath=os.path.join('tmp', '{}.json'.format(self.product_id)))
+            filepath=os.path.join(self.output_dir, '{}.json'.format(self.product_id)))
 
     def output(self):
         return luigi.LocalTarget(os.path.join(
-            'tmp', '{}.ply'.format(self.product_id)))
+            self.output_dir, '{}.{}'.format(self.product_id, self.file_format)))
 
     def run(self):
         # load metadata
@@ -84,7 +88,7 @@ class CreateMeshFromLasData(luigi.Task):
         download_tasks = [
             BinaryDownloader(
                 url=x,
-                filepath=os.path.join('tmp', os.path.basename(x)))
+                filepath=os.path.join(self.output_dir, os.path.basename(x)))
             for x in las_urls
         ]
         yield download_tasks
@@ -102,16 +106,16 @@ class CreateMeshFromLasData(luigi.Task):
                 ))
         yield convert_tasks
 
-        #
+        # load dataset
         lasdataset = []
         for convert_task in convert_tasks:
             lasdataset.append(
-                LasFile(convert_task.output().path).toarray(skip_rate=0.5))
+                LasFile(convert_task.output().path).toarray(skip_rate=0.2))
 
         lasdata = np.concatenate(lasdataset)
         # lasdata = lasdataset[1]
 
-        print(lasdata.shape)
+        print('point cloud shape', lasdata.shape)
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
 
@@ -122,16 +126,24 @@ class CreateMeshFromLasData(luigi.Task):
         # 法線計算
         o3d.geometry.PointCloud.estimate_normals(voxel_down_pcd)
 
-        distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
-            voxel_down_pcd)
-        avg_dist = np.mean(distances)
-        print(avg_dist)
-
         # メッシュ化
-        radius = 3 * avg_dist
-        radii = [radius, radius * 2]
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-            voxel_down_pcd, o3d.utility.DoubleVector(radii))
+        if self.mesh_type == 'ball_pivoting':
+            distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
+                voxel_down_pcd)
+            avg_dist = np.mean(distances)
+            print('average distance', avg_dist)
+            radius = 4 * avg_dist
+            radii = [radius, radius * 3]
+            mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+                voxel_down_pcd, o3d.utility.DoubleVector(radii))
+        else:
+            mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                voxel_down_pcd, depth=11, linear_fit=False)
+
+        if self.simplify_type == 'quadric_decimation':
+            mesh = mesh.simplify_quadric_decimation(1000000)
+        else:
+            mesh = mesh.simplify_vertex_clustering(self, 0.1)
 
         # データ保存
         o3d.io.write_triangle_mesh(self.output().path, mesh)
