@@ -110,7 +110,7 @@ class CreateMeshFromLasData(luigi.Task):
         lasdataset = []
         for convert_task in convert_tasks:
             lasdataset.append(
-                LasFile(convert_task.output().path).toarray(skip_rate=0.2))
+                LasFile(convert_task.output().path).toarray(skip_rate=0.5))
 
         lasdata = np.concatenate(lasdataset)
         # lasdata = lasdataset[1]
@@ -120,25 +120,31 @@ class CreateMeshFromLasData(luigi.Task):
         pcd = plydata.obj
 
         # 指定したvoxelサイズでダウンサンプリング
+        voxel_size = 0.05
         voxel_down_pcd = o3d.geometry.PointCloud.voxel_down_sample(
-            pcd, voxel_size=0.1)
+            pcd, voxel_size=voxel_size)
+        target_pcd = voxel_down_pcd
 
         # 法線計算
-        o3d.geometry.PointCloud.estimate_normals(voxel_down_pcd)
+        target_pcd.estimate_normals(
+            o3d.geometry.KDTreeSearchParamHybrid(
+                radius=voxel_size * 2.0,
+                max_nn=30))
+        target_pcd.orient_normals_to_align_with_direction()
 
         # メッシュ化
-        if self.mesh_type == 'ball_pivoting':
+        if self.mesh_type == 'ball-pivoting':
             distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
-                voxel_down_pcd)
+                target_pcd)
             avg_dist = np.mean(distances)
             print('average distance', avg_dist)
-            radius = 4 * avg_dist
-            radii = [radius, radius * 3]
+            radius = 2 * avg_dist
+            radii = [radius, radius * 4]
             mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-                voxel_down_pcd, o3d.utility.DoubleVector(radii))
+                target_pcd, o3d.utility.DoubleVector(radii))
         else:
             mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-                voxel_down_pcd, depth=11, linear_fit=False)
+                target_pcd, depth=11, linear_fit=True)
 
         if self.simplify_type == 'quadric_decimation':
             mesh = mesh.simplify_quadric_decimation(1000000)
