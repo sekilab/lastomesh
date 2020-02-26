@@ -67,7 +67,7 @@ class CreateMeshFromLasData(luigi.Task):
     output_dir = luigi.Parameter(default='tmp')
     file_format = luigi.Parameter(default='ply')
     mesh_type = luigi.Parameter(default='poisson')
-    simplify_type = luigi.Parameter(default='quadric_decimation')
+    simplify_type = luigi.Parameter(default=None)
 
     def requires(self):
         return TextDownloader(
@@ -146,10 +146,12 @@ class CreateMeshFromLasData(luigi.Task):
             mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
                 target_pcd, depth=11, linear_fit=True)
 
-        if self.simplify_type == 'quadric_decimation':
-            mesh = mesh.simplify_quadric_decimation(1000000)
+        if self.simplify_type == 'quadric-decimation':
+            mesh = mesh.simplify_quadric_decimation(10000000)
+        elif self.simplify_type == 'vertex-clustering':
+            mesh = mesh.simplify_vertex_clustering(self, voxel_size*1.1)
         else:
-            mesh = mesh.simplify_vertex_clustering(self, 0.1)
+            pass
 
         # データ保存
         o3d.io.write_triangle_mesh(self.output().path, mesh)
