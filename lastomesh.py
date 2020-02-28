@@ -144,6 +144,7 @@ class CreateMeshFromLasData(luigi.Task):
         voxel_down_pcd = o3d.geometry.PointCloud.voxel_down_sample(
             pcd, voxel_size=voxel_size)
         target_pcd = voxel_down_pcd
+        pcd_center =target_pcd.get_center().tolist()
 
         # 法線計算
         target_pcd.estimate_normals(
@@ -152,7 +153,7 @@ class CreateMeshFromLasData(luigi.Task):
                 max_nn=30))
         # target_pcd, _ = target_pcd.remove_statistical_outlier(5, 1.5)
         # target_pcd.orient_normals_to_align_with_direction()
-        target_pcd.orient_normals_towards_camera_location([0, 0, 10000])
+        target_pcd.orient_normals_towards_camera_location(pcd_center[:-1]+[pcd_center[-1]*100])
         target_pcd = target_pcd.normalize_normals()
 
         # メッシュ化
@@ -173,9 +174,9 @@ class CreateMeshFromLasData(luigi.Task):
                 target_pcd, depth=11, linear_fit=True)
 
         if self.simplify_type == 'quadric-decimation':
-            mesh = mesh.simplify_quadric_decimation(lasdata.shape[0]/2)
+            mesh = mesh.simplify_quadric_decimation(int(len(mesh.triangles)*0.01))
         elif self.simplify_type == 'vertex-clustering':
-            mesh = mesh.simplify_vertex_clustering(self, voxel_size*1.1)
+            mesh = mesh.simplify_vertex_clustering(self, voxel_size*100)
         else:
             pass
 
