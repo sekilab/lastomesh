@@ -70,17 +70,106 @@ class ConvertLasFile(luigi.Task):
         subprocess.check_output(cmd)
 
 
-# class DownloadShizuokaPCD(luigi.Task):
-    # product_id = luigi.Parameter()
-    # base_url = 'https://raw.githubusercontent.com/colspan/pcd-open-datasets/master/shizuokapcd/product/{}.json'
-    # output_dir = luigi.Parameter(default='tmp/mesh')
-    # output_filename = luigi.Parameter(default=None)
-    # work_dir = luigi.Parameter(default='tmp/work')
+class DownloadShizuokaPCD(luigi.Task):
+    product_id = luigi.Parameter()
+    base_url = 'https://raw.githubusercontent.com/colspan/pcd-open-datasets/master/shizuokapcd/product/{}.json'
+    output_dir = luigi.Parameter(default='tmp/mesh')
+    work_dir = luigi.Parameter(default='tmp/work')
 
-    # def requires(self):
-    #     return TextDownloader(
-    #         url=self.base_url.format(self.product_id),
-    #         filepath=os.path.join(self.work_dir, '{}.json'.format(self.product_id)))
+    def requires(self):
+        return TextDownloader(
+            url=self.base_url.format(self.product_id),
+            filepath=os.path.join(self.work_dir, '{}.json'.format(self.product_id)))
+
+    def output(self):
+        return {
+            'stat_info': luigi.LocalTarget(os.path.join(
+                self.output_dir, 'stat-{}.json'.format(self.product_id)), format=luigi.format.UTF8),
+        }
+
+    def load_product_info(self):
+        with self.input().open('r') as f:
+            product_info = json.load(f)
+        return product_info
+
+    def load_stat_info(self):
+        with self.output()['stat_info'].open('r') as f:
+            stat_info = json.load(f)
+        return stat_info
+
+    def load_dataset(self, skip_rate=0):
+        download_tasks = self.download_tasks()
+        lasdataset = []
+        for download_task in download_tasks:
+            lasdataset.append(
+                LasFile(download_task.output().path).toarray(skip_rate=skip_rate))
+
+        lasdata = np.concatenate(lasdataset)
+        return lasdata
+
+
+    def download_tasks(self):
+        # load metadata
+        product_info = self.load_product_info()
+        las_urls = product_info['lasUrls']['value']
+        download_tasks = [
+            BinaryDownloader(
+                url=x,
+                filepath=os.path.join(self.work_dir, os.path.basename(x)))
+            for x in las_urls
+        ]
+        return download_tasks
+
+    def run(self):
+        # load metadata
+        product_info = self.load_product_info()
+
+        # get las dataset
+        download_tasks = self.download_tasks()
+        yield download_tasks
+
+        # load dataset
+        lasdataset = []
+        for download_task in download_tasks:
+            lasdataset.append(
+                LasFile(download_task.output().path).toarray(skip_rate=0))
+
+        lasdata = np.concatenate(lasdataset)
+
+        plydata = PlyFile(data=lasdata)
+        pcd = plydata.obj
+
+        # fetch stat
+        distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
+            pcd)
+        stat_info = {
+            'productIdFlat': {
+                'value': self.product_id,
+            },
+            'shape': {
+                'value': lasdata.shape,
+            },
+            'metrics': {
+                'value': {
+                    'distance': get_metrics(distances),
+                    'x': get_metrics(lasdata[:, 0]),
+                    'y': get_metrics(lasdata[:, 1]),
+                    'z': get_metrics(lasdata[:, 2]),
+                    'i': get_metrics(lasdata[:, 3]),
+                    'r': get_metrics(lasdata[:, 4]),
+                    'g': get_metrics(lasdata[:, 5]),
+                    'b': get_metrics(lasdata[:, 6]),
+                },
+            },
+            'downloadedFiles': {
+                'value': [x.output().path for x in download_tasks],
+            },
+        }
+        product_info.update(stat_info)
+
+        with self.output()['stat_info'].open('w') as f:
+            json.dump(product_info, f, indent=2, ensure_ascii=False)
+
 
 class CreateMeshFromLasData(luigi.Task):
     product_id = luigi.Parameter()
@@ -93,9 +182,9 @@ class CreateMeshFromLasData(luigi.Task):
     simplify_type = luigi.Parameter(default=None)
 
     def requires(self):
-        return TextDownloader(
-            url=self.base_url.format(self.product_id),
-            filepath=os.path.join(self.work_dir, '{}.json'.format(self.product_id)))
+        return DownloadShizuokaPCD(product_id=self.product_id,
+                                   work_dir=self.work_dir,
+                                   output_dir=self.output_dir)
 
     def output(self):
         output_filename = 'mesh-{}.{}'.format(self.product_id, self.file_format) \
@@ -104,74 +193,17 @@ class CreateMeshFromLasData(luigi.Task):
         return {
             'mesh_file': luigi.LocalTarget(os.path.join(
                 self.output_dir, output_filename)),
-            'stat_info': luigi.LocalTarget(os.path.join(
-                self.output_dir, 'stat-{}.json'.format(self.product_id))),
         }
 
     def run(self):
-        # load metadata
-        with self.input().open('r') as f:
-            product_info = json.load(f)
-        las_urls = product_info['lasUrls']['value']
-
-        # get las dataset
-        download_tasks = [
-            BinaryDownloader(
-                url=x,
-                filepath=os.path.join(self.work_dir, os.path.basename(x)))
-            for x in las_urls
-        ]
-        yield download_tasks
-
-        # convert las files
-        convert_tasks = []
-        for download_task in download_tasks:
-            original_path = os.path.basename(download_task.output().path)
-            converted_path = os.path.join(
-                self.work_dir, 'converted-{}'.format(os.path.basename(original_path)))
-            convert_tasks.append(
-                ConvertLasFile(
-                    input_path=download_task.output().path,
-                    output_path=converted_path
-                ))
-        yield convert_tasks
-
-        # load dataset
-        lasdataset = []
-        for convert_task in convert_tasks:
-            lasdataset.append(
-                LasFile(convert_task.output().path).toarray(skip_rate=0))
-
-        lasdata = np.concatenate(lasdataset)
+        stat_info = self.requires().load_stat_info()
+        lasdata = self.requires().load_dataset()
 
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
 
-        # fetch stat
-        distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
-            pcd)
-        stat_info = {
-            'id': self.product_id,
-            'shape': lasdata.shape,
-            'metrics': {
-                'distance': get_metrics(distances),
-                'x': get_metrics(lasdata[:, 0]),
-                'y': get_metrics(lasdata[:, 1]),
-                'z': get_metrics(lasdata[:, 2]),
-                'i': get_metrics(lasdata[:, 3]),
-                'r': get_metrics(lasdata[:, 4]),
-                'g': get_metrics(lasdata[:, 5]),
-                'b': get_metrics(lasdata[:, 6]),
-            },
-        }
-
-        with self.output()['stat_info'].open('w') as f:
-            json.dump(stat_info, f, indent=2)
-
-        return
-
         # 指定したvoxelサイズでダウンサンプリング
-        avg_dist = np.mean(distances)
+        avg_dist = stat_info['metrics']['value']['distance']['mean']
         voxel_size = avg_dist * 3
         voxel_down_pcd = o3d.geometry.PointCloud.voxel_down_sample(
             pcd, voxel_size=voxel_size)
