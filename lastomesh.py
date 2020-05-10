@@ -46,9 +46,12 @@ class BinaryDownloader(luigi.Task):
             format=luigi.format.Nop, path=self.filepath)
 
     def run(self):
-        r = requests.get(self.url)
-        with self.output().open('w') as f:
-            f.write(r.content)
+        r = requests.get(self.url, stream=True)
+        if r.status_code == 200:
+            with self.output().open('w') as f:
+                # f.write(r.content)
+                for chunk in r.iter_content(chunk_size=1024*10):
+                    f.write(chunk)
 
 
 class ConvertLasFile(luigi.Task):
@@ -106,7 +109,6 @@ class DownloadShizuokaPCD(luigi.Task):
 
         lasdata = np.concatenate(lasdataset)
         return lasdata
-
 
     def download_tasks(self):
         # load metadata
@@ -197,8 +199,14 @@ class CreateMeshFromLasData(luigi.Task):
 
     def run(self):
         stat_info = self.requires().load_stat_info()
-        lasdata = self.requires().load_dataset()
+        print(stat_info)
 
+        if stat_info['shape']['value'][0] > 100000000:
+            skip_rate = 0.5
+        else:
+            skip_rate = 0
+
+        lasdata = self.requires().load_dataset(skip_rate=skip_rate)
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
 
@@ -235,12 +243,14 @@ class CreateMeshFromLasData(luigi.Task):
             mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
                 target_pcd, o3d.utility.DoubleVector(radii))
         else:
-            mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
                 target_pcd, depth=11, linear_fit=True)
+            vertices_to_remove = densities < np.quantile(densities, 0.01)
+            mesh.remove_vertices_by_mask(vertices_to_remove)
 
         if self.simplify_type == 'quadric-decimation':
             mesh = mesh.simplify_quadric_decimation(
-                int(len(mesh.triangles)*0.01))
+                int(len(mesh.triangles)*0.05))
         elif self.simplify_type == 'vertex-clustering':
             mesh = mesh.simplify_vertex_clustering(self, voxel_size*100)
         else:
@@ -257,7 +267,7 @@ class ShowPointCloud(luigi.Task):
         return CreateMeshFromLasData(self.product_id)
 
     def run(self):
-        mesh = o3d.io.read_triangle_mesh(self.input().path)
+        mesh = o3d.io.read_triangle_mesh(self.input()['mesh_file'].path)
         # メッシュデータの表示
         o3d.visualization.draw_geometries([mesh])
 
