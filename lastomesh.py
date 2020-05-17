@@ -52,6 +52,8 @@ class BinaryDownloader(luigi.Task):
                 # f.write(r.content)
                 for chunk in r.iter_content(chunk_size=1024*10):
                     f.write(chunk)
+        else:
+            raise ConnectionError(r.status_code)
 
 
 class ConvertLasFile(luigi.Task):
@@ -87,7 +89,9 @@ class DownloadShizuokaPCD(luigi.Task):
     def output(self):
         return {
             'stat_info': luigi.LocalTarget(os.path.join(
-                self.output_dir, 'stat-{}.json'.format(self.product_id)), format=luigi.format.UTF8),
+                self.output_dir,
+                'stat-{}.json'.format(self.product_id)),
+                format=luigi.format.UTF8),
         }
 
     def load_product_info(self):
@@ -131,17 +135,20 @@ class DownloadShizuokaPCD(luigi.Task):
         yield download_tasks
 
         # load dataset
+        skip_rate = 0.8
         lasdataset = []
         for download_task in download_tasks:
             lasdataset.append(
-                LasFile(download_task.output().path).toarray(skip_rate=0))
+                LasFile(download_task.output().path).toarray(skip_rate=skip_rate))
 
         lasdata = np.concatenate(lasdataset)
+        lasdata_shape = lasdata.shape
+        if skip_rate > 0:
+            lasdata_shape = (int(lasdata_shape[0] / skip_rate), lasdata_shape[1])
 
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
 
-        # fetch stat
         distances = o3d.geometry.PointCloud.compute_nearest_neighbor_distance(
             pcd)
         stat_info = {
@@ -149,7 +156,7 @@ class DownloadShizuokaPCD(luigi.Task):
                 'value': self.product_id,
             },
             'shape': {
-                'value': lasdata.shape,
+                'value': lasdata_shape,
             },
             'metrics': {
                 'value': {
@@ -211,6 +218,7 @@ class CreateMeshFromLasData(luigi.Task):
         pcd = plydata.obj
 
         # 指定したvoxelサイズでダウンサンプリング
+        print('downsizing')
         avg_dist = stat_info['metrics']['value']['distance']['mean']
         voxel_size = avg_dist * 3
         voxel_down_pcd = o3d.geometry.PointCloud.voxel_down_sample(
@@ -219,6 +227,7 @@ class CreateMeshFromLasData(luigi.Task):
         pcd_center = target_pcd.get_center().tolist()
 
         # 法線計算
+        print('estimate normal vectors')
         target_pcd.estimate_normals(
             o3d.geometry.KDTreeSearchParamHybrid(
                 radius=voxel_size,
@@ -230,6 +239,7 @@ class CreateMeshFromLasData(luigi.Task):
         target_pcd = target_pcd.normalize_normals()
 
         # メッシュ化
+        print('meshing')
         if self.mesh_type == 'ball-pivoting':
             radius = voxel_size
             radii = [
@@ -248,16 +258,50 @@ class CreateMeshFromLasData(luigi.Task):
             vertices_to_remove = densities < np.quantile(densities, 0.01)
             mesh.remove_vertices_by_mask(vertices_to_remove)
 
+        print('simplifying meshes')
+        # TODO reduce memory usage
         if self.simplify_type == 'quadric-decimation':
             mesh = mesh.simplify_quadric_decimation(
                 int(len(mesh.triangles)*0.05))
         elif self.simplify_type == 'vertex-clustering':
-            mesh = mesh.simplify_vertex_clustering(self, voxel_size*100)
+            mesh = mesh.simplify_vertex_clustering(voxel_size*5)
+            mesh = mesh.simplify_quadric_decimation(
+                int(len(mesh.triangles)*0.5))
         else:
             pass
 
         # データ保存
         o3d.io.write_triangle_mesh(self.output()['mesh_file'].path, mesh)
+
+
+# class RenderPointCloud(luigi.Task):
+#     product_id = luigi.Parameter()
+#     output_dir = luigi.Parameter(default='tmp/mesh')
+#     output_filename = luigi.Parameter(default=None)
+#     work_dir = luigi.Parameter(default='tmp/work')
+#     file_format = luigi.Parameter(default='ply')
+#     mesh_type = luigi.Parameter(default='poisson')
+#     simplify_type = luigi.Parameter(default=None)
+
+#     def requires(self):
+#         return CreateMeshFromLasData(
+#             product_id=self.product_id,
+#             output_dir=self.output_dir,
+#             output_filename=self.output_filename,
+#             work_dir=self.work_dir,
+#             file_format=self.file_format,
+#             mesh_type=self.mesh_type,
+#             simplify_type=self.simplify_type)
+
+#     def output(self):
+#         return luigi.LocalTarget(
+#             os.path.join(self.output_dir,
+#                          '{}.png'.format(self.output_filename)))
+
+#     def run(self):
+#         mesh = o3d.io.read_triangle_mesh(self.input().path)
+#         # メッシュデータの表示
+#         o3d.visualization.draw_geometries([mesh])
 
 
 class ShowPointCloud(luigi.Task):
