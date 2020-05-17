@@ -19,6 +19,7 @@ def get_metrics(nparray):
         'median': np.median(nparray),
         'max': np.max(nparray),
         'min': np.min(nparray),
+        'var': np.var(nparray),
     }
 
 
