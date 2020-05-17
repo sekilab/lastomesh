@@ -145,7 +145,8 @@ class DownloadShizuokaPCD(luigi.Task):
         lasdata = np.concatenate(lasdataset)
         lasdata_shape = lasdata.shape
         if skip_rate > 0:
-            lasdata_shape = (int(lasdata_shape[0] / skip_rate), lasdata_shape[1])
+            lasdata_shape = (
+                int(lasdata_shape[0] / skip_rate), lasdata_shape[1])
 
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
@@ -315,6 +316,23 @@ class ShowPointCloud(luigi.Task):
         mesh = o3d.io.read_triangle_mesh(self.input()['mesh_file'].path)
         # メッシュデータの表示
         o3d.visualization.draw_geometries([mesh])
+
+
+class DownloadShizuokaPCDs(luigi.WrapperTask):
+    product_list = luigi.Parameter()
+    output_dir = luigi.Parameter(default='tmp/mesh')
+    work_dir = luigi.Parameter(default='tmp/work')
+
+    def requires(self):
+        with open(self.product_list, 'r') as f:
+            product_list = json.load(f)
+        return [
+            DownloadShizuokaPCD(
+                product_id=product['id'],
+                work_dir=os.path.join(self.work_dir, product['id']),
+                output_dir=self.output_dir)
+            for product in product_list
+        ]
 
 
 if __name__ == "__main__":
