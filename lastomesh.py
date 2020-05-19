@@ -146,7 +146,7 @@ class DownloadShizuokaPCD(luigi.Task):
         lasdata_shape = lasdata.shape
         if skip_rate > 0:
             lasdata_shape = (
-                int(lasdata_shape[0] / skip_rate), lasdata_shape[1])
+                int(float(lasdata_shape[0]) / (1.0 - skip_rate)), lasdata_shape[1])
 
         plydata = PlyFile(data=lasdata)
         pcd = plydata.obj
