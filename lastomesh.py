@@ -191,6 +191,7 @@ class CreateMeshFromLasData(luigi.Task):
     file_format = luigi.Parameter(default='ply')
     mesh_type = luigi.Parameter(default='poisson')
     simplify_type = luigi.Parameter(default=None)
+    skip_meshing = luigi.Parameter(default=False)
 
     def requires(self):
         return DownloadShizuokaPCD(product_id=self.product_id,
@@ -227,6 +228,11 @@ class CreateMeshFromLasData(luigi.Task):
             pcd, voxel_size=voxel_size)
         target_pcd = voxel_down_pcd
         pcd_center = target_pcd.get_center().tolist()
+
+        if self.skip_meshing:
+            # データ保存
+            o3d.io.write_point_cloud(self.output()['mesh_file'].path, target_pcd)
+            return
 
         # 法線計算
         print('estimate normal vectors')
