@@ -282,46 +282,53 @@ class CreateMeshFromLasData(luigi.Task):
         o3d.io.write_triangle_mesh(self.output()['mesh_file'].path, mesh)
 
 
-# class RenderPointCloud(luigi.Task):
-#     product_id = luigi.Parameter()
-#     output_dir = luigi.Parameter(default='tmp/mesh')
-#     output_filename = luigi.Parameter(default=None)
-#     work_dir = luigi.Parameter(default='tmp/work')
-#     file_format = luigi.Parameter(default='ply')
-#     mesh_type = luigi.Parameter(default='poisson')
-#     simplify_type = luigi.Parameter(default=None)
-
-#     def requires(self):
-#         return CreateMeshFromLasData(
-#             product_id=self.product_id,
-#             output_dir=self.output_dir,
-#             output_filename=self.output_filename,
-#             work_dir=self.work_dir,
-#             file_format=self.file_format,
-#             mesh_type=self.mesh_type,
-#             simplify_type=self.simplify_type)
-
-#     def output(self):
-#         return luigi.LocalTarget(
-#             os.path.join(self.output_dir,
-#                          '{}.png'.format(self.output_filename)))
-
-#     def run(self):
-#         mesh = o3d.io.read_triangle_mesh(self.input().path)
-#         # メッシュデータの表示
-#         o3d.visualization.draw_geometries([mesh])
-
-
-class ShowPointCloud(luigi.Task):
+class RenderProduct(luigi.Task):
     product_id = luigi.Parameter()
+    output_dir = luigi.Parameter(default='tmp/render')
+    mesh_output_dir = luigi.Parameter(default='tmp/mesh')
+    output_filename = luigi.Parameter(default=None)
+    work_dir = luigi.Parameter(default='tmp/work')
+    file_format = luigi.Parameter(default='ply')
+    mesh_type = luigi.Parameter(default='poisson')
+    simplify_type = luigi.Parameter(default=None)
 
     def requires(self):
-        return CreateMeshFromLasData(self.product_id)
+        return CreateMeshFromLasData(
+            product_id=self.product_id,
+            output_dir=self.mesh_output_dir,
+            output_filename=self.output_filename,
+            work_dir=self.work_dir,
+            file_format=self.file_format,
+            mesh_type=self.mesh_type,
+            simplify_type=self.simplify_type)
+
+    def output(self):
+        return luigi.LocalTarget(
+            os.path.join(self.output_dir,
+                         '{}.png'.format(self.output_filename)))
 
     def run(self):
+        os.makedirs(os.path.dirname(self.output().path), exist_ok=True)
         mesh = o3d.io.read_triangle_mesh(self.input()['mesh_file'].path)
-        # メッシュデータの表示
-        o3d.visualization.draw_geometries([mesh])
+
+        vis = o3d.visualization.Visualizer()
+
+        mesh.translate([-x for x in mesh.get_center()])
+
+        def capture_and_close(vis):
+            vis.capture_screen_image(self.output().path, False)
+            vis.close()
+            return False
+
+        vis.create_window()
+        vis.add_geometry(mesh)
+
+        ctr = vis.get_view_control()
+        ctr.rotate(0.0, -300.0)
+
+        vis.register_animation_callback(capture_and_close)
+        vis.run()
+        vis.destroy_window()
 
 
 class DownloadShizuokaPCDs(luigi.WrapperTask):
